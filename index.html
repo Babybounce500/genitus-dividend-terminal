@@ -135,13 +135,12 @@
       <span class="field-label">Min. Yield %</span>
       <input type="number" id="minYieldInput" value="0" min="0" step="0.5" oninput="renderTable()">
     </div>
-    <button class="btn btn-gold" onclick="startScan()" id="scanBtn">SCAN FOR PAYERS</button>
-    <button class="btn btn-red" onclick="stopScan()" id="stopBtn" style="display:none">STOP</button>
+    <button class="btn btn-gold" onclick="loadPayers()" id="scanBtn">RELOAD</button>
     <button class="btn btn-primary" onclick="exportPayersCSV()">EXPORT CSV</button>
   </div>
 
   <div class="scan-status" id="scanStatus">
-    <span id="scanStatusText">Scanning...</span>
+    <span id="scanStatusText">Loading cache...</span>
     <div class="scan-bar"><div class="scan-bar-fill" id="scanBarFill"></div></div>
     <span id="scanStatusCount"></span>
   </div>
@@ -163,7 +162,7 @@
           <th data-key="streak">Streak</th>
         </tr></thead>
         <tbody id="payerBody">
-          <tr><td colspan="7" class="empty-state"><div class="empty-icon">💰</div>SELECT AN EXCHANGE AND HIT "SCAN FOR PAYERS"<br><span style="opacity:.6">Only symbols with real, confirmed dividend history show up here — no money burners.</span></td></tr>
+          <tr><td colspan="7" class="empty-state"><div class="empty-icon">💰</div>Loading...<br><span style="opacity:.6">Only symbols with real, confirmed dividend history show up here — no money burners.</span></td></tr>
         </tbody>
       </table>
     </div>
@@ -193,7 +192,7 @@
       </div>
       <div class="info-box">
         <h3>Scan scope &amp; caching</h3>
-        <p>A full exchange can hold thousands of tickers, so the scan runs live and progressively — results appear as they're confirmed, and you can stop anytime and keep what's found. Every scanned exchange is cached per-browser (24h), so re-opening it later is instant instead of re-scanning from zero.</p>
+        <p>Every exchange's payer list, full payment history and price-on-date are pre-scanned and cached — switching exchanges is instant, no live scanning. Only the one symbol you open in detail gets a fresh live price + latest-dividend check, since dividends themselves only change quarterly (US) or annually (most of Europe) anyway.</p>
       </div>
     </div>
   </div>
@@ -236,8 +235,6 @@
 
   const PROXY = 'https://theserver-open-ai.replit.app';
   const US_EXCH = ['US','NYSE','NASDAQ','AMEX','PINK','OTCQB','OTCQX','BATS'];
-  const CACHE_TTL_MS = 24*60*60*1000;
-  const CONCURRENCY = 8;
 
   // Same 83 verified-working exchanges as the main ticker terminal.
   const EXCHANGES = [
@@ -345,133 +342,43 @@
     return divCacheLoading;
   }
 
-  // ── SCAN STATE ──
-  let scanning=false, scanAbort=false;
-  let payers=[]; // {symbol,fullSymbol,name,type,ex,records,lastAmount,lastDate,yieldPct,streak}
+  // ── STATE ──
+  // No bulk live refresh anymore: the whole exchange list renders straight
+  // from the pre-scanned cache. Only the single symbol a user opens in the
+  // detail modal gets a live price + latest-dividend check.
+  let payers=[]; // {symbol,fullSymbol,name,type,ex,lastAmount,lastDate,yieldPct,streak,...}
   let sortKey='yield', sortDir='desc';
 
-  function cacheKeyFor(ex){ return `divscan:${ex}`; }
-  function loadCachedPayers(ex){
-    try{
-      const raw=localStorage.getItem(cacheKeyFor(ex));
-      if(!raw) return null;
-      const parsed=JSON.parse(raw);
-      if(Date.now()-parsed.t > CACHE_TTL_MS) return null;
-      return parsed.payers;
-    }catch(e){ return null; }
-  }
-  function saveCachedPayers(ex, list){
-    try{ localStorage.setItem(cacheKeyFor(ex), JSON.stringify({t:Date.now(), payers:list})); }catch(e){}
-  }
+  function onExchangeChange(){ loadPayers(); }
 
-  function onExchangeChange(){
-    const ex=document.getElementById('exchangeSelect').value;
-    payers=[];
-    if(!ex){ renderTable(); return; }
-    const cached=loadCachedPayers(ex);
-    if(cached && cached.length){
-      payers=cached;
-      renderTable();
-      showToast(`⚡ ${payers.length} payers loaded from cache`);
-    } else {
-      renderTable();
-    }
-  }
-
-  async function runPool(items, worker, onProgress){
-    let i=0, active=0;
-    return new Promise(resolve=>{
-      function next(){
-        if(scanAbort){ resolve(); return; }
-        if(i>=items.length && active===0){ resolve(); return; }
-        while(active<CONCURRENCY && i<items.length && !scanAbort){
-          const item=items[i++]; active++;
-          worker(item).catch(()=>{}).finally(()=>{ active--; onProgress(i, items.length); next(); });
-        }
-      }
-      next();
-    });
-  }
-
-  async function startScan(){
+  async function loadPayers(){
     const ex=document.getElementById('exchangeSelect').value;
     if(!ex) return showToast('Select an exchange first', true);
-    if(scanning) return;
-    scanning=true; scanAbort=false;
-    document.getElementById('scanBtn').style.display='none';
-    document.getElementById('stopBtn').style.display='inline-block';
+
     document.getElementById('scanStatus').classList.add('active');
+    document.getElementById('scanStatusText').textContent = `Loading cache — ${ex}`;
+    document.getElementById('scanStatusCount').textContent = '';
+    document.getElementById('scanBarFill').style.width = '0%';
 
     await loadDividendCache();
     const activeTypes = INCLUDE_TYPES.filter(t=>t.on).map(t=>t.t);
     const cached = (divSummaryByExchange.get(ex)||[]).filter(r=>activeTypes.includes(r.type));
 
+    document.getElementById('scanBarFill').style.width = '100%';
+    document.getElementById('scanStatus').classList.remove('active');
+
     if(!cached.length){
+      payers = [];
+      renderTable();
       showToast('No cached dividend payers for this exchange/type yet — batch scan may still be running', true);
-      finishScan(); return;
+      return;
     }
 
-    // Everything historical (payment history, price-on-date, streak) is already
-    // known from the cache — show it immediately, then refresh only price and
-    // the latest dividend record live, per payer.
+    // Straight from cache, no network calls at all — instant. Only the
+    // single symbol a user opens in the detail modal gets a live check.
     payers = cached.map(r=>({...r}));
     renderTable();
-    document.getElementById('scanStatusText').textContent = `Refreshing live price + latest dividend — ${ex}`;
-    document.getElementById('scanStatusCount').textContent = `0/${payers.length}`;
-
-    await runPool(payers, async (p)=>{
-      try{
-        const [priceRes, divRes] = await Promise.all([
-          fetch(`${PROXY}/eod/realtime/${p.fullSymbol}`),
-          fetch(`${PROXY}/eod/dividends/${p.fullSymbol}`)
-        ]);
-        if(priceRes.ok){
-          const j = await priceRes.json().catch(()=>null);
-          const c = j ? (Array.isArray(j)?j[j.length-1]:j) : null;
-          const cl = c && c.close !== undefined && c.close !== null && c.close !== 'NA' ? parseFloat(c.close) : NaN;
-          if(!isNaN(cl) && cl>0) p.price = cl;
-        }
-        let trailingSum = null;
-        if(divRes.ok){
-          const records = await divRes.json().catch(()=>null);
-          if(Array.isArray(records) && records.length){
-            const sorted=[...records].sort((a,b)=>new Date(b.date)-new Date(a.date));
-            const last=sorted[0];
-            p.lastDate=last.date; p.lastAmount=parseFloat(last.value)||0; p.lastCurrency=last.currency||'';
-            p.count=records.length;
-            const oneYearAgo=Date.now()-365*86400000;
-            trailingSum = records.filter(r=>new Date(r.date).getTime()>=oneYearAgo).reduce((s,r)=>s+(parseFloat(r.value)||0),0);
-            // Keep the freshest full history around for the detail modal too.
-            divHistoryBySymbol.set(p.fullSymbol, records.map(r=>({date:r.date, value:parseFloat(r.value)||0, currency:r.currency||'', price:null, pctOfPrice:null})));
-          }
-        }
-        if(trailingSum===null){
-          const hist = divHistoryBySymbol.get(p.fullSymbol) || [];
-          const oneYearAgo=Date.now()-365*86400000;
-          trailingSum = hist.filter(r=>new Date(r.date).getTime()>=oneYearAgo).reduce((s,r)=>s+r.value,0);
-        }
-        if(p.price && trailingSum>0) p.yieldPct = trailingSum/p.price*100;
-      }catch(e){}
-    }, (done,total)=>{
-      if(done % 10 === 0 || done===total){
-        document.getElementById('scanBarFill').style.width = Math.round(done/total*100)+'%';
-        document.getElementById('scanStatusCount').textContent = `${done}/${total} refreshed`;
-        renderTable();
-      }
-    });
-
-    saveCachedPayers(ex, payers);
-    renderTable();
-    showToast(`✓ ${payers.length} payers${scanAbort?' — stopped early':''} (history from cache, price + latest dividend live)`);
-    finishScan();
-  }
-
-  function stopScan(){ scanAbort=true; }
-  function finishScan(){
-    scanning=false;
-    document.getElementById('scanBtn').style.display='inline-block';
-    document.getElementById('stopBtn').style.display='none';
-    document.getElementById('scanStatus').classList.remove('active');
+    showToast(`⚡ ${payers.length} payers loaded from cache`);
   }
 
   // Streak is precomputed by the batch scan and lives in the cache; no client-side recompute needed.
@@ -505,7 +412,7 @@
     document.getElementById('payerCount').textContent = rows.length;
     const tbody=document.getElementById('payerBody');
     if(!rows.length){
-      tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="empty-icon">💰</div>${payers.length?'NO PAYERS ABOVE THAT YIELD THRESHOLD':'SELECT AN EXCHANGE AND HIT "SCAN FOR PAYERS"'}<br><span style="opacity:.6">Only symbols with real, confirmed dividend history show up here — no money burners.</span></td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="empty-icon">💰</div>${payers.length?'NO PAYERS ABOVE THAT YIELD THRESHOLD':'Loading...'}<br><span style="opacity:.6">Only symbols with real, confirmed dividend history show up here — no money burners.</span></td></tr>`;
       return;
     }
     const fmt=n=>{ const v=parseFloat(n); return isNaN(v)?'—':(v<0.01?'$'+v.toFixed(6):'$'+v.toFixed(2)); };
@@ -555,6 +462,42 @@
     document.getElementById('detailTitle').textContent = `${p.fullSymbol} — ${p.name}`;
     document.getElementById('detailModal').classList.add('open');
     document.body.style.overflow='hidden';
+    document.getElementById('detailBody').innerHTML = '<div class="loading-line"><span class="spinner"></span>Refreshing price + latest dividend for this symbol...</div>';
+
+    // Live refresh happens ONLY for the single symbol being opened here —
+    // not for the whole list. Everything else on screen stays cache-only.
+    try{
+      const [priceRes, divRes] = await Promise.all([
+        fetch(`${PROXY}/eod/realtime/${p.fullSymbol}`),
+        fetch(`${PROXY}/eod/dividends/${p.fullSymbol}`)
+      ]);
+      if(priceRes.ok){
+        const j = await priceRes.json().catch(()=>null);
+        const c = j ? (Array.isArray(j)?j[j.length-1]:j) : null;
+        const cl = c && c.close !== undefined && c.close !== null && c.close !== 'NA' ? parseFloat(c.close) : NaN;
+        if(!isNaN(cl) && cl>0) p.price = cl;
+      }
+      if(divRes.ok){
+        const fresh = await divRes.json().catch(()=>null);
+        if(Array.isArray(fresh) && fresh.length){
+          const sorted=[...fresh].sort((a,b)=>new Date(b.date)-new Date(a.date));
+          const last=sorted[0];
+          p.lastDate=last.date; p.lastAmount=parseFloat(last.value)||0; p.lastCurrency=last.currency||'';
+          p.count=fresh.length;
+          const oneYearAgo=Date.now()-365*86400000;
+          const trailingSum = fresh.filter(r=>new Date(r.date).getTime()>=oneYearAgo).reduce((s,r)=>s+(parseFloat(r.value)||0),0);
+          if(p.price && trailingSum>0) p.yieldPct = trailingSum/p.price*100;
+          // Keep whatever price-on-date the cache already resolved per date;
+          // only genuinely new (post-cache) payments come in without one.
+          const oldByDate = new Map((divHistoryBySymbol.get(fullSymbol)||[]).map(r=>[r.date, r]));
+          divHistoryBySymbol.set(fullSymbol, fresh.map(r=>{
+            const old = oldByDate.get(r.date);
+            return { date:r.date, value:parseFloat(r.value)||0, currency:r.currency||'', price: old?old.price:null, pctOfPrice: old?old.pctOfPrice:null };
+          }));
+        }
+      }
+    }catch(e){}
+    renderTable(); // reflect the refreshed price/yield in the underlying list too
 
     // Price-on-date and pct-of-price are precomputed by the batch scan and
     // ship straight from the cache — no live historical fetch needed here.
@@ -633,7 +576,8 @@
   // ── INIT ──
   buildExchangeSelect();
   buildTypeFilters();
-  loadDividendCache();
+  document.getElementById('exchangeSelect').value = 'XETRA';
+  loadPayers(); // auto-load the default exchange, no click required
 </script>
 </body>
 </html>
