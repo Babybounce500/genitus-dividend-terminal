@@ -235,6 +235,10 @@
 
   const PROXY = 'https://theserver-open-ai.replit.app';
   const US_EXCH = ['US','NYSE','NASDAQ','AMEX','PINK','OTCQB','OTCQX','BATS'];
+  // Confirmed via spot-check against real-world prices: these exchanges quote
+  // in minor units (GBX pence / Agorot) while dividend amounts come in the
+  // major unit (GBP / ILS) — divide live price by 100 or yield comes out 100x too low.
+  const MINOR_UNIT_EXCHANGES = new Set(['LSE', 'TA']);
 
   // Same 83 verified-working exchanges as the main ticker terminal.
   const EXCHANGES = [
@@ -474,7 +478,8 @@
       if(priceRes.ok){
         const j = await priceRes.json().catch(()=>null);
         const c = j ? (Array.isArray(j)?j[j.length-1]:j) : null;
-        const cl = c && c.close !== undefined && c.close !== null && c.close !== 'NA' ? parseFloat(c.close) : NaN;
+        let cl = c && c.close !== undefined && c.close !== null && c.close !== 'NA' ? parseFloat(c.close) : NaN;
+        if(!isNaN(cl) && MINOR_UNIT_EXCHANGES.has(p.ex)) cl = cl/100;
         if(!isNaN(cl) && cl>0) p.price = cl;
       }
       if(divRes.ok){
