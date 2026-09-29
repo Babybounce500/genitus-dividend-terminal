@@ -276,7 +276,7 @@
       EXCHANGES.map(g=>`<optgroup label="${g.g}">${g.opts.map(o=>`<option value="${o.v}">${o.l}</option>`).join('')}</optgroup>`).join('');
   }
 
-  const INCLUDE_TYPES = [{t:'COMMON STOCK',l:'STOCKS',on:true},{t:'ETF',l:'ETF',on:true},{t:'FUND',l:'FUNDS',on:false},{t:'PREFERRED STOCK',l:'PREFERRED',on:false}];
+  const INCLUDE_TYPES = [{t:'COMMON STOCK',l:'STOCKS',on:true},{t:'ETF',l:'ETF',on:false},{t:'FUND',l:'FUNDS',on:false},{t:'PREFERRED STOCK',l:'PREFERRED',on:false}];
   function buildTypeFilters(){
     const c=document.getElementById('typeFilters');
     INCLUDE_TYPES.forEach(t=>{
