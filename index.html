@@ -326,7 +326,7 @@
         divSummaryByExchange.get(ex).push({
           fullSymbol, symbol: fullSymbol.split('.')[0], name: (name||'').trim(), type: (type||'').toUpperCase(), ex,
           count: parseInt(count)||0, streak: {years: parseInt(streakYears)||1, direction: streakDir||'new'},
-          yieldPct: parseFloat(cachedYield)||0, price: cachedPrice ? parseFloat(cachedPrice) : null,
+          yieldPct: (parseFloat(cachedYield)||0)>50?0:(parseFloat(cachedYield)||0), price: cachedPrice ? parseFloat(cachedPrice) : null,
           lastDate: lastDate||'', lastAmount: parseFloat(lastAmount)||0, lastCurrency: lastCurrency||''
         });
       }
@@ -491,7 +491,7 @@
           p.count=fresh.length;
           const oneYearAgo=Date.now()-365*86400000;
           const trailingSum = fresh.filter(r=>new Date(r.date).getTime()>=oneYearAgo).reduce((s,r)=>s+(parseFloat(r.value)||0),0);
-          if(p.price && trailingSum>0) p.yieldPct = trailingSum/p.price*100;
+          if(p.price && trailingSum>0){ const recomputed = trailingSum/p.price*100; p.yieldPct = recomputed>50?0:recomputed; }
           // Keep whatever price-on-date the cache already resolved per date;
           // only genuinely new (post-cache) payments come in without one.
           const oldByDate = new Map((divHistoryBySymbol.get(fullSymbol)||[]).map(r=>[r.date, r]));
